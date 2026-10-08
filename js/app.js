@@ -3,6 +3,7 @@ import { DriftSimulator, gpsErrorMessage, startGps } from './position.js';
 import { WindParticles } from './particles.js';
 import { fetchWind, loadCachedWind } from './wind.js';
 import { angleDiff, compassPoint, normalizeDeg } from './geo.js';
+import { noaaChartLayer } from './charts.js';
 
 const { L } = window;
 const $ = (id) => document.getElementById(id);
@@ -13,7 +14,7 @@ const GPS_STALE_MS = 10000;
 const params = new URLSearchParams(location.search);
 
 // ---------- Settings (remembered on this device) ----------
-const settings = { windowSec: 60, particles: true, baseLayer: 'Ocean', ...loadSettings() };
+const settings = { windowSec: 60, particles: true, baseLayer: 'NOAA Chart', ...loadSettings() };
 
 function loadSettings() {
   try { return JSON.parse(localStorage.getItem('fluke.settings')) || {}; } catch { return {}; }
@@ -26,7 +27,9 @@ function saveSettings() {
 const map = L.map('map', { zoomControl: false, attributionControl: true }).setView([40.6, -73.5], 9);
 
 const esriAttribution = 'Tiles &copy; Esri &mdash; Esri, GEBCO, NOAA, and contributors';
+const noaaChart = noaaChartLayer(L);
 const baseLayers = {
+  'NOAA Chart': noaaChart,
   Ocean: L.layerGroup([
     L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}', {
       maxNativeZoom: 13, maxZoom: 18, attribution: esriAttribution,
@@ -42,16 +45,33 @@ const baseLayers = {
     maxZoom: 18, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   }),
 };
-(baseLayers[settings.baseLayer] || baseLayers.Ocean).addTo(map);
-L.control.layers(baseLayers, null, { position: 'topright' }).addTo(map);
-map.on('baselayerchange', (e) => { settings.baseLayer = e.name; saveSettings(); });
-
+// Light-colored maps (the chart, streets) need dark wind streaks to be visible.
+const LIGHT_LAYERS = ['NOAA Chart', 'Streets'];
 const particles = new WindParticles(map);
 particles.setEnabled(settings.particles);
 
+if (!baseLayers[settings.baseLayer]) settings.baseLayer = 'NOAA Chart';
+baseLayers[settings.baseLayer].addTo(map);
+particles.setLightBackground(LIGHT_LAYERS.includes(settings.baseLayer));
+L.control.layers(baseLayers, null, { position: 'topright' }).addTo(map);
+map.on('baselayerchange', (e) => {
+  settings.baseLayer = e.name;
+  saveSettings();
+  particles.setLightBackground(LIGHT_LAYERS.includes(e.name));
+});
+
+// NOAA's chart server is occasionally slow or down; say so instead of
+// leaving a blank map.
+let chartErrors = 0;
+noaaChart.on('tileerror', () => {
+  chartErrors += 1;
+  if (chartErrors === 6) toast('NOAA charts aren\'t loading right now. Try another map from the layers button (top right).', 8000);
+});
+noaaChart.on('tileload', () => { chartErrors = 0; });
+
 // Boat, trail, and projected drift overlays.
-const trailLine = L.polyline([], { color: '#7fd6ff', weight: 3, opacity: 0.75 }).addTo(map);
-const accuracyCircle = L.circle([0, 0], { radius: 0, color: '#ffffff', weight: 1, opacity: 0.4, fillOpacity: 0.06, interactive: false });
+const trailLine = L.polyline([], { color: '#1e90ff', weight: 3, opacity: 0.85 }).addTo(map);
+const accuracyCircle = L.circle([0, 0], { radius: 0, color: '#8899aa', weight: 1, opacity: 0.6, fillOpacity: 0.08, interactive: false });
 const boatMarker = L.marker([0, 0], {
   icon: L.divIcon({ className: '', html: '<div class="boat"></div>', iconSize: [22, 22] }),
   interactive: false,

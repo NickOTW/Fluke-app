@@ -14,7 +14,7 @@ Screen** to launch it full screen like a regular app.
 | **Drift** (speed + direction) | Your phone's GPS. Fixes from the last 30 s / 1 min / 2 min are fit with a straight line, so GPS jitter averages out. The *steady / settling / rough estimate* label shows how much to trust it. |
 | **Wind** | [Open-Meteo](https://open-meteo.com/) forecast (free, no key). Its US blend includes NOAA's HRRR model. This is a **forecast**, not a live reading. |
 | **"Drifting with the wind" / "Wind against current"** | Compares the drift direction with the downwind direction. |
-| **Map** | Esri Ocean basemap (shows depth contours), satellite, or OpenStreetMap. |
+| **Map** | **NOAA nautical chart** (default): the official ENC charts in paper-chart style, from NOAA's Chart Display Service, updated weekly. Also: Esri Ocean basemap, satellite, or OpenStreetMap (layers button, top right). |
 
 The phone's motion sensors aren't used: they can't measure a steady drift.
 GPS does that job.
@@ -42,6 +42,7 @@ css/app.css         styling
 js/app.js           wires everything together (map, HUD, settings)
 js/drift.js         GPS fixes -> drift speed/direction (the core math)
 js/wind.js          Open-Meteo wind forecast + interpolation
+js/charts.js        NOAA nautical chart layer
 js/particles.js     animated wind streaks
 js/position.js      real GPS + demo simulator
 js/geo.js           small geometry helpers
@@ -62,4 +63,3 @@ branch → `main` / root**.
 - NOAA tidal current predictions, with the current shown as its own arrow
 - A time slider to preview wind and current over the next few hours
 - Save good drifts and replay them
-- NOAA nautical chart layer

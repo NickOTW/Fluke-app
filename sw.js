@@ -3,14 +3,14 @@
 // - Map tiles: cache first, so areas you've viewed at the dock still show at sea.
 // - Wind forecasts are cached by the app itself (localStorage), not here.
 
-const APP_CACHE = 'fluke-app-v1';
+const APP_CACHE = 'fluke-app-v2';
 const TILE_CACHE = 'fluke-tiles-v1';
 const MAX_TILES = 3000;
-const TILE_HOSTS = ['server.arcgisonline.com', 'tile.openstreetmap.org'];
+const TILE_HOSTS = ['gis.charttools.noaa.gov', 'server.arcgisonline.com', 'tile.openstreetmap.org'];
 
 const APP_FILES = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest',
-  'js/app.js', 'js/drift.js', 'js/geo.js', 'js/particles.js', 'js/position.js', 'js/wind.js',
+  'js/app.js', 'js/charts.js', 'js/drift.js', 'js/geo.js', 'js/particles.js', 'js/position.js', 'js/wind.js',
   'vendor/leaflet/leaflet.js', 'vendor/leaflet/leaflet.css',
   'icons/icon-180.png', 'icons/icon-192.png',
 ];

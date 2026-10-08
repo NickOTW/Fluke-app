@@ -13,13 +13,14 @@ const AREA_PER_PARTICLE = 1600; // px² of screen per particle
 const MAX_PARTICLES = 1500;
 
 // [max knots, color] - first bucket whose limit exceeds the speed wins.
-const COLORS = [
-  [6, 'rgba(255,255,255,0.75)'],
-  [12, 'rgba(176,236,255,0.9)'],
-  [18, 'rgba(255,226,122,0.95)'],
-  [25, 'rgba(255,165,80,0.95)'],
-  [Infinity, 'rgba(255,100,100,0.95)'],
-];
+// One palette for dark maps (ocean, satellite), one for light maps (charts).
+const BUCKETS = [6, 12, 18, 25, Infinity];
+const PALETTES = {
+  dark: ['rgba(255,255,255,0.75)', 'rgba(176,236,255,0.9)', 'rgba(255,226,122,0.95)',
+    'rgba(255,165,80,0.95)', 'rgba(255,100,100,0.95)'],
+  light: ['rgba(30,45,80,0.65)', 'rgba(20,80,170,0.8)', 'rgba(150,40,170,0.85)',
+    'rgba(205,70,0,0.9)', 'rgba(200,0,30,0.9)'],
+};
 
 export class WindParticles {
   constructor(map) {
@@ -28,6 +29,7 @@ export class WindParticles {
     this.enabled = true;
     this.particles = [];
     this.raf = 0;
+    this.colors = PALETTES.dark;
 
     const pane = map.createPane('wind');
     pane.style.zIndex = 350; // above tiles (200), below shapes/markers (400+)
@@ -45,6 +47,10 @@ export class WindParticles {
   setField(field) {
     this.field = field;
     this._restart();
+  }
+
+  setLightBackground(light) {
+    this.colors = light ? PALETTES.light : PALETTES.dark;
   }
 
   setEnabled(on) {
@@ -129,7 +135,7 @@ export class WindParticles {
     ctx.globalCompositeOperation = 'source-over';
 
     // Batch line segments by color for speed.
-    const batches = COLORS.map(() => []);
+    const batches = BUCKETS.map(() => []);
     for (const p of this.particles) {
       const [vx, vy, kt] = this._sample(p.x, p.y);
       const nx = p.x + vx * dt;
@@ -140,7 +146,7 @@ export class WindParticles {
         this._spawn(p);
         continue;
       }
-      const bucket = COLORS.findIndex(([max]) => kt < max);
+      const bucket = BUCKETS.findIndex((max) => kt < max);
       batches[bucket].push(p.x, p.y, nx, ny);
       p.x = nx;
       p.y = ny;
@@ -150,7 +156,7 @@ export class WindParticles {
     ctx.lineCap = 'round';
     batches.forEach((segs, i) => {
       if (!segs.length) return;
-      ctx.strokeStyle = COLORS[i][1];
+      ctx.strokeStyle = this.colors[i];
       ctx.beginPath();
       for (let j = 0; j < segs.length; j += 4) {
         ctx.moveTo(segs[j], segs[j + 1]);
