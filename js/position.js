@@ -2,6 +2,7 @@
 // from the couch. Both call onFix({ t, lat, lon, accuracy }).
 
 import { MS_PER_KNOT, destination } from './geo.js';
+import { distanceBearing } from './planner.js';
 
 /** Start watching real GPS. Returns a stop() function. */
 export function startGps(onFix, onError) {
@@ -52,24 +53,45 @@ export class DriftSimulator {
   }
 
   start(onFix) {
-    let truePos = { ...this.origin };
+    this.truePos = { ...this.origin };
+    this.run = null;
     let simT = Date.now();
     const t0 = simT;
     const stepSec = (this.intervalMs / 1000) * this.timeScale;
 
     const tick = () => {
       simT += stepSec * 1000;
-      const minutes = (simT - t0) / 60000;
-      const speed = this.speedKt + 0.15 * Math.sin(minutes / 4);
-      const bearing = this.bearing + 12 * Math.sin(minutes / 7);
-      truePos = destination(truePos, bearing, speed * MS_PER_KNOT * stepSec);
-
-      const noisy = destination(truePos, Math.random() * 360, Math.abs(gaussian()) * this.noiseM);
+      if (this.run) {
+        this._stepRun(stepSec);
+      } else {
+        const minutes = (simT - t0) / 60000;
+        const speed = this.speedKt + 0.15 * Math.sin(minutes / 4);
+        const bearing = this.bearing + 12 * Math.sin(minutes / 7);
+        this.truePos = destination(this.truePos, bearing, speed * MS_PER_KNOT * stepSec);
+      }
+      const noisy = destination(this.truePos, Math.random() * 360, Math.abs(gaussian()) * this.noiseM);
       onFix({ t: simT, lat: noisy.lat, lon: noisy.lon, accuracy: this.noiseM + Math.random() * 2 });
     };
     tick();
     const id = setInterval(tick, this.intervalMs);
     return () => clearInterval(id);
+  }
+
+  /** Motor to `dest` at `speedKt`, then go back to drifting. */
+  runTo(dest, speedKt = 20) {
+    this.run = { dest, speedKt };
+  }
+
+  _stepRun(stepSec) {
+    const { dest, speedKt } = this.run;
+    const { distanceM, bearing } = distanceBearing(this.truePos, dest);
+    const step = speedKt * MS_PER_KNOT * stepSec;
+    if (step >= distanceM) {
+      this.truePos = { ...dest };
+      this.run = null;
+    } else {
+      this.truePos = destination(this.truePos, bearing, step);
+    }
   }
 }
 

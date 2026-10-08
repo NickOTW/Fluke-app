@@ -14,7 +14,24 @@ Screen** to launch it full screen like a regular app.
 | **Drift** (speed + direction) | Your phone's GPS. Fixes from the last 30 s / 1 min / 2 min are fit with a straight line, so GPS jitter averages out. The *steady / settling / rough estimate* label shows how much to trust it. |
 | **Wind** | [Open-Meteo](https://open-meteo.com/) forecast (free, no key). Its US blend includes NOAA's HRRR model. This is a **forecast**, not a live reading. |
 | **"Drifting with the wind" / "Wind against current"** | Compares the drift direction with the downwind direction. |
-| **Map** | **NOAA nautical chart** (default): the official ENC charts in paper-chart style, from NOAA's Chart Display Service, updated weekly. Also: Esri Ocean basemap, satellite, or OpenStreetMap (layers button, top right). |
+| **Map** | **NOAA nautical chart** (default): NOAA's official charts from its pre-drawn tile cache. **NOAA Chart (live)** is a backup drawn on request by NOAA's Maritime Chart Service. Also: Esri Ocean basemap, satellite, or OpenStreetMap (layers button, top right). |
+
+### Drift planner
+
+Tap **Plan drift**, then tap the spot you want to fish over (a lump, wreck,
+or edge on the chart). Using your measured drift, the app shows:
+
+- a **START** point up-drift of the target, with the drift lane and a cone
+  showing how sure it is of the direction
+- **Run to start · 0.3 nm NW (323°)** while you get into position
+- once you're drifting: **On line · over target in 1:20**, or
+  **Passing 40 ft SE of target**, so you know which way to shift next time
+- **Past the target** when it's time to run back up
+
+Choose how long to drift before reaching the target (1–5 min) so baits are
+on the bottom when you get there. The target can be dragged to adjust it.
+The app notices when you're running under power (over ~5 kt) and starts a
+fresh drift measurement when you stop.
 
 The phone's motion sensors aren't used: they can't measure a steady drift.
 GPS does that job.
@@ -31,7 +48,8 @@ GPS does that job.
 
 ## Try it without a boat
 
-Tap **Try demo (simulated)**, or open `…/?demo`. Add `&fast=10` to speed up
+Tap **Try demo (simulated)**, or open `…/?demo`. In the demo, after planning
+a drift, **Run to start (demo)** motors the simulated boat to the start. Add `&fast=10` to speed up
 the simulated clock.
 
 ## Project layout
@@ -42,7 +60,8 @@ css/app.css         styling
 js/app.js           wires everything together (map, HUD, settings)
 js/drift.js         GPS fixes -> drift speed/direction (the core math)
 js/wind.js          Open-Meteo wind forecast + interpolation
-js/charts.js        NOAA nautical chart layer
+js/charts.js        NOAA nautical chart layers
+js/planner.js       drift planner math (start point, closest approach)
 js/particles.js     animated wind streaks
 js/position.js      real GPS + demo simulator
 js/geo.js           small geometry helpers

@@ -14,6 +14,72 @@ const MAX_PLAUSIBLE_SPEED_MS = 25; // ~50 kt; anything faster is a GPS glitch
 const TRAIL_MIN_SPACING_M = 3;
 const TRAIL_MAX_POINTS = 5000;
 
+/**
+ * Fit a straight line (position vs. time) through `fixes` (oldest first).
+ * Returns the drift estimate described on DriftTracker#estimate, or null.
+ */
+function fitDrift(fixes) {
+  const latest = fixes[fixes.length - 1];
+  const spanSec = (latest.t - fixes[0].t) / 1000;
+
+  // Weighted least squares, separately for east and north.
+  // Weight = 1/accuracy² so sharp fixes count more than fuzzy ones.
+  const origin = latest;
+  let W = 0; let St = 0; let Sx = 0; let Sy = 0;
+  const pts = fixes.map((f) => {
+    const m = toLocalMeters(origin, f);
+    const p = { t: (f.t - latest.t) / 1000, x: m.east, y: m.north, w: 1 / (f.accuracy * f.accuracy) };
+    W += p.w; St += p.w * p.t; Sx += p.w * p.x; Sy += p.w * p.y;
+    return p;
+  });
+  const tBar = St / W; const xBar = Sx / W; const yBar = Sy / W;
+
+  let Stt = 0; let Stx = 0; let Sty = 0;
+  for (const p of pts) {
+    const dt = p.t - tBar;
+    Stt += p.w * dt * dt;
+    Stx += p.w * dt * (p.x - xBar);
+    Sty += p.w * dt * (p.y - yBar);
+  }
+  if (Stt <= 0) return null;
+  const vx = Stx / Stt;
+  const vy = Sty / Stt;
+
+  // Scatter around the fitted line -> uncertainty of the slope.
+  let chi2 = 0;
+  for (const p of pts) {
+    const dt = p.t - tBar;
+    const rx = p.x - (xBar + vx * dt);
+    const ry = p.y - (yBar + vy * dt);
+    chi2 += p.w * (rx * rx + ry * ry);
+  }
+  const dof = Math.max(1, 2 * pts.length - 4);
+  const varSlope = (chi2 / dof) / Stt; // per axis
+  const uncertaintyMs = Math.sqrt(2 * varSlope);
+
+  const speedMs = Math.hypot(vx, vy);
+  const uncertaintyKt = uncertaintyMs / MS_PER_KNOT;
+  let quality = 'poor';
+  if (uncertaintyKt < 0.1) quality = 'good';
+  else if (uncertaintyKt < 0.25) quality = 'fair';
+
+  // Smoothed position = fitted line evaluated at the latest fix time (t = 0).
+  const position = fromLocalMeters(origin, xBar - vx * tBar, yBar - vy * tBar);
+
+  return {
+    speedMs,
+    speedKt: speedMs / MS_PER_KNOT,
+    bearing: bearingFromVector(vx, vy),
+    east: vx,
+    north: vy,
+    uncertaintyKt,
+    quality,
+    position,
+    spanSec,
+    count: pts.length,
+  };
+}
+
 export class DriftTracker {
   constructor({ windowSec = 60, maxAccuracyM = 30 } = {}) {
     this.windowSec = windowSec;
@@ -74,69 +140,27 @@ export class DriftTracker {
   estimate() {
     const latest = this.latestFix;
     if (!latest) return null;
-
-    const since = latest.t - this.windowSec * 1000;
-    const win = this.fixes.filter((f) => f.t >= since);
+    const win = this.fixes.filter((f) => f.t >= latest.t - this.windowSec * 1000);
     const spanSec = (latest.t - win[0].t) / 1000;
-    const minSpan = Math.min(15, this.windowSec / 2);
-    if (win.length < 4 || spanSec < minSpan) return null;
+    if (win.length < 4 || spanSec < Math.min(15, this.windowSec / 2)) return null;
+    return fitDrift(win);
+  }
 
-    // Weighted least squares, separately for east and north.
-    // Weight = 1/accuracy² so sharp fixes count more than fuzzy ones.
-    const origin = latest;
-    let W = 0; let St = 0; let Sx = 0; let Sy = 0;
-    const pts = win.map((f) => {
-      const m = toLocalMeters(origin, f);
-      const p = { t: (f.t - latest.t) / 1000, x: m.east, y: m.north, w: 1 / (f.accuracy * f.accuracy) };
-      W += p.w; St += p.w * p.t; Sx += p.w * p.x; Sy += p.w * p.y;
-      return p;
-    });
-    const tBar = St / W; const xBar = Sx / W; const yBar = Sy / W;
+  /**
+   * Rough speed over just the last few seconds, in knots, used to tell
+   * "running under power" from "drifting". Null if there's too little data.
+   */
+  recentSpeedKt(sec = 15) {
+    const latest = this.latestFix;
+    if (!latest) return null;
+    const win = this.fixes.filter((f) => f.t >= latest.t - sec * 1000);
+    if (win.length < 5 || (latest.t - win[0].t) / 1000 < sec / 2) return null;
+    return fitDrift(win)?.speedKt ?? null;
+  }
 
-    let Stt = 0; let Stx = 0; let Sty = 0;
-    for (const p of pts) {
-      const dt = p.t - tBar;
-      Stt += p.w * dt * dt;
-      Stx += p.w * dt * (p.x - xBar);
-      Sty += p.w * dt * (p.y - yBar);
-    }
-    if (Stt <= 0) return null;
-    const vx = Stx / Stt;
-    const vy = Sty / Stt;
-
-    // Scatter around the fitted line -> uncertainty of the slope.
-    let chi2 = 0;
-    for (const p of pts) {
-      const dt = p.t - tBar;
-      const rx = p.x - (xBar + vx * dt);
-      const ry = p.y - (yBar + vy * dt);
-      chi2 += p.w * (rx * rx + ry * ry);
-    }
-    const dof = Math.max(1, 2 * pts.length - 4);
-    const varSlope = (chi2 / dof) / Stt; // per axis
-    const uncertaintyMs = Math.sqrt(2 * varSlope);
-
-    const speedMs = Math.hypot(vx, vy);
-    const uncertaintyKt = uncertaintyMs / MS_PER_KNOT;
-    let quality = 'poor';
-    if (uncertaintyKt < 0.1) quality = 'good';
-    else if (uncertaintyKt < 0.25) quality = 'fair';
-
-    // Smoothed position = fitted line evaluated at the latest fix time (t = 0).
-    const position = fromLocalMeters(origin, xBar - vx * tBar, yBar - vy * tBar);
-
-    return {
-      speedMs,
-      speedKt: speedMs / MS_PER_KNOT,
-      bearing: bearingFromVector(vx, vy),
-      east: vx,
-      north: vy,
-      uncertaintyKt,
-      quality,
-      position,
-      spanSec,
-      count: pts.length,
-    };
+  /** Start measuring a fresh drift (e.g. after running), keeping the trail. */
+  restartDrift() {
+    this.fixes = [];
   }
 
   /** Where the boat will be after `minutes` if the drift holds. */

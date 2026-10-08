@@ -1,13 +1,19 @@
-// NOAA nautical charts.
+// NOAA nautical charts, from NOAA Office of Coast Survey's chart services.
 //
-// NOAA's Chart Display Service renders the official electronic navigational
-// charts (ENC, updated weekly) in traditional paper-chart symbology. It's an
-// ArcGIS "export" service: you ask for a bounding box and get an image back.
-// We ask for one image per standard 256 px map tile, at 2x resolution so it's
-// sharp on iPhone screens.
+// Two versions of the same official charts (ENC, updated weekly):
+// - "NOAA Chart": NOAA's pre-drawn tile cache. Fast. Its zoom levels are
+//   numbered 2 lower than standard web map zoom (its level 0 = web zoom 2).
+// - "NOAA Chart (live)": drawn on request by NOAA's Maritime Chart Service.
+//   Slower, but a useful backup if the tile cache is down.
+//
+// Note: the plain .../MapServer/export endpoints on these services return
+// blank images; the chart must come from /tile or the MaritimeChartService
+// extension's export.
 
-const EXPORT_URL = 'https://gis.charttools.noaa.gov/arcgis/rest/services/MCS/NOAAChartDisplay/MapServer/export';
+const TILE_URL = 'https://gis.charttools.noaa.gov/arcgis/rest/services/MarineChart_Services/NOAACharts/MapServer/tile/{z}/{y}/{x}';
+const LIVE_EXPORT_URL = 'https://gis.charttools.noaa.gov/arcgis/rest/services/MCS/NOAAChartDisplay/MapServer/exts/MaritimeChartService/MapServer/export';
 const WEB_MERCATOR_HALF = 20037508.342789244; // meters, EPSG:3857
+const ATTRIBUTION = 'Charts: <a href="https://nauticalcharts.noaa.gov/" target="_blank" rel="noopener">NOAA Office of Coast Survey</a>';
 
 /** EPSG:3857 bounds [minX, minY, maxX, maxY] of map tile x/y at zoom z. */
 export function tileBounds3857(x, y, z) {
@@ -17,8 +23,13 @@ export function tileBounds3857(x, y, z) {
   return [minX, maxY - size, minX + size, maxY];
 }
 
-/** Image URL for one map tile of the NOAA chart. */
-export function noaaChartTileUrl(x, y, z, scale = 2) {
+/** URL of NOAA's cached chart tile for web map tile x/y/z. */
+export function noaaChartTileUrl(x, y, z) {
+  return TILE_URL.replace('{z}', z - 2).replace('{y}', y).replace('{x}', x);
+}
+
+/** URL of a live-drawn chart image covering web map tile x/y/z. */
+export function noaaLiveChartUrl(x, y, z, scale = 2) {
   const px = 256 * scale;
   const params = new URLSearchParams({
     bbox: tileBounds3857(x, y, z).map((n) => n.toFixed(2)).join(','),
@@ -30,17 +41,23 @@ export function noaaChartTileUrl(x, y, z, scale = 2) {
     transparent: 'false',
     f: 'image',
   });
-  return `${EXPORT_URL}?${params}`;
+  return `${LIVE_EXPORT_URL}?${params}`;
 }
 
-/** Leaflet layer for the NOAA chart. */
+/** Leaflet layer for NOAA's cached chart tiles. */
 export function noaaChartLayer(L) {
-  const NoaaLayer = L.TileLayer.extend({
+  const Layer = L.TileLayer.extend({
     getTileUrl: (coords) => noaaChartTileUrl(coords.x, coords.y, coords.z),
   });
-  return new NoaaLayer('', {
-    maxZoom: 18,
-    minZoom: 3,
-    attribution: 'Charts: <a href="https://nauticalcharts.noaa.gov/" target="_blank" rel="noopener">NOAA Office of Coast Survey</a>',
+  // 17 cached levels (0-16) = web zoom 2-18.
+  return new Layer('', { minZoom: 2, maxZoom: 18, attribution: ATTRIBUTION });
+}
+
+/** Leaflet layer for live-drawn charts (backup). */
+export function noaaLiveChartLayer(L) {
+  const Layer = L.TileLayer.extend({
+    getTileUrl: (coords) => noaaLiveChartUrl(coords.x, coords.y, coords.z),
   });
+  // NOAA's live charts draw nothing when zoomed out further than ~5.
+  return new Layer('', { minZoom: 5, maxZoom: 18, attribution: ATTRIBUTION });
 }

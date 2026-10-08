@@ -32,6 +32,20 @@
   </header>
 
   <section class="hud" id="hud" aria-live="polite" hidden>
+    <div class="plan" id="plan" hidden>
+      <div class="plan-head">
+        <span class="label plan-label">Drift plan</span>
+        <button type="button" class="plan-clear" id="btn-plan-clear">Clear</button>
+      </div>
+      <div class="plan-status" id="plan-status"></div>
+      <div class="plan-sub" id="plan-sub"></div>
+      <div class="plan-controls" id="plan-controls" hidden>
+        <span class="plan-lead-label">Reach target after</span>
+        <div class="segmented small" id="lead-select"></div>
+      </div>
+      <button type="button" class="btn small ghost" id="btn-demo-run" hidden>Run to start (demo)</button>
+    </div>
+
     <svg class="dial" viewBox="-60 -60 120 120" aria-hidden="true">
       <circle class="ring" r="52"/>
       <g class="ticks" id="dial-ticks"></g>
@@ -60,6 +74,7 @@
 
     <div class="hud-actions" id="hud-actions" hidden>
       <button type="button" class="btn small" id="btn-reset">New drift</button>
+      <button type="button" class="btn small plan-btn" id="btn-plan">Plan drift</button>
       <button type="button" class="btn small ghost" id="btn-stop">Stop</button>
     </div>
   </section>

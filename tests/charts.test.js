@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { noaaChartTileUrl, tileBounds3857 } from '../js/charts.js';
+import { noaaChartTileUrl, noaaLiveChartUrl, tileBounds3857 } from '../js/charts.js';
 
 const HALF = 20037508.342789244;
 
@@ -15,9 +15,15 @@ test('tile y counts down from the top', () => {
   assert.deepEqual(tileBounds3857(1, 1, 1).map(Math.round), [0, -Math.round(HALF), Math.round(HALF), 0]);
 });
 
-test('tile URL asks for a 2x image of the right box', () => {
+test('cached tile URL uses NOAA level = web zoom - 2, row then column', () => {
+  // Known-good tile from NOAA's cache over SF Bay: level 8, row 395, col 163.
+  assert.match(noaaChartTileUrl(163, 395, 10), /NOAACharts\/MapServer\/tile\/8\/395\/163$/);
+});
+
+test('live chart URL uses the Maritime Chart Service export and a 2x image', () => {
   // Zoom 15 tile containing a spot off Montauk.
-  const url = new URL(noaaChartTileUrl(9838, 12337, 15));
+  const url = new URL(noaaLiveChartUrl(9838, 12337, 15));
+  assert.match(url.pathname, /exts\/MaritimeChartService\/MapServer\/export$/);
   assert.equal(url.searchParams.get('size'), '512,512');
   assert.equal(url.searchParams.get('dpi'), '192');
   assert.equal(url.searchParams.get('f'), 'image');

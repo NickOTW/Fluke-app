@@ -17,6 +17,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 html, body {
   margin: 0;
@@ -157,6 +158,62 @@ button { font: inherit; color: inherit; }
 
 .hud-actions { grid-column: 1 / -1; display: flex; gap: 10px; margin-top: 8px; }
 .hud-actions .btn { flex: 1; }
+
+/* ---------- Drift plan ---------- */
+.plan {
+  grid-column: 1 / -1;
+  margin-bottom: 6px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(18, 183, 106, 0.1);
+  border: 1px solid rgba(18, 183, 106, 0.45);
+}
+.plan[hidden] { display: none; }
+.plan-head { display: flex; align-items: center; justify-content: space-between; }
+.plan-label { color: #3ddc97; }
+.plan-clear { border: 0; background: none; color: var(--muted); font-size: 14px; font-weight: 600; padding: 4px 0 4px 12px; cursor: pointer; }
+.plan-status { font-size: 18px; font-weight: 700; margin-top: 4px; }
+.plan-status.good { color: #3ddc97; }
+.plan-status.off { color: var(--warn); }
+.plan-sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.plan-sub:empty { display: none; }
+.plan-controls { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.plan-controls[hidden] { display: none; }
+.plan-lead-label { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.plan-controls .segmented { flex: 1; }
+.segmented.small button { min-height: 32px; font-size: 13px; }
+#btn-demo-run { margin-top: 8px; }
+#btn-demo-run[hidden] { display: none; }
+.plan-btn { background: rgba(18, 183, 106, 0.22); }
+
+.plan-target {
+  border-radius: 50%;
+  pointer-events: auto;
+  border: 3px solid #12b76a;
+  box-shadow: 0 0 0 2px #fff, inset 0 0 0 2px #fff;
+  background: rgba(18, 183, 106, 0.15);
+}
+.plan-target span {
+  position: absolute; left: 50%; top: 50%;
+  width: 6px; height: 6px; margin: -3px 0 0 -3px;
+  border-radius: 50%; background: #12b76a; box-shadow: 0 0 0 2px #fff;
+}
+.plan-start-dot {
+  position: absolute;
+  width: 12px; height: 12px; margin: -6px 0 0 -6px;
+  border-radius: 3px; background: #12b76a; border: 2px solid #fff;
+}
+.plan-start {
+  position: absolute;
+  transform: translate(-50%, -150%);
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: #12b76a;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
 
 /* ---------- Buttons ---------- */
 .btn {

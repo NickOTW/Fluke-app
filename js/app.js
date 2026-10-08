@@ -2,8 +2,11 @@ import { DriftTracker } from './drift.js';
 import { DriftSimulator, gpsErrorMessage, startGps } from './position.js';
 import { WindParticles } from './particles.js';
 import { fetchWind, loadCachedWind } from './wind.js';
-import { angleDiff, compassPoint, normalizeDeg } from './geo.js';
-import { noaaChartLayer } from './charts.js';
+import { angleDiff, compassPoint, destination, normalizeDeg } from './geo.js';
+import { noaaChartLayer, noaaLiveChartLayer } from './charts.js';
+import {
+  directionUncertaintyDeg, distanceBearing, formatDistance, formatDuration, planStatus, startPoint,
+} from './planner.js';
 
 const { L } = window;
 const $ = (id) => document.getElementById(id);
@@ -11,6 +14,9 @@ const $ = (id) => document.getElementById(id);
 const PROJECTION_MINUTES = [5, 10, 15];
 const WIND_MAX_AGE_MS = 30 * 60 * 1000;
 const GPS_STALE_MS = 10000;
+const RUN_START_KT = 5; // faster than this over the last ~15 s = running under power
+const RUN_END_KT = 3.5; // back below this = drifting again
+const LEAD_OPTIONS_MIN = [1, 2, 3, 5];
 const params = new URLSearchParams(location.search);
 
 // ---------- Settings (remembered on this device) ----------
@@ -28,8 +34,10 @@ const map = L.map('map', { zoomControl: false, attributionControl: true }).setVi
 
 const esriAttribution = 'Tiles &copy; Esri &mdash; Esri, GEBCO, NOAA, and contributors';
 const noaaChart = noaaChartLayer(L);
+const noaaLiveChart = noaaLiveChartLayer(L);
 const baseLayers = {
   'NOAA Chart': noaaChart,
+  'NOAA Chart (live)': noaaLiveChart,
   Ocean: L.layerGroup([
     L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}', {
       maxNativeZoom: 13, maxZoom: 18, attribution: esriAttribution,
@@ -46,7 +54,7 @@ const baseLayers = {
   }),
 };
 // Light-colored maps (the chart, streets) need dark wind streaks to be visible.
-const LIGHT_LAYERS = ['NOAA Chart', 'Streets'];
+const LIGHT_LAYERS = ['NOAA Chart', 'NOAA Chart (live)', 'Streets'];
 const particles = new WindParticles(map);
 particles.setEnabled(settings.particles);
 
@@ -63,11 +71,13 @@ map.on('baselayerchange', (e) => {
 // NOAA's chart server is occasionally slow or down; say so instead of
 // leaving a blank map.
 let chartErrors = 0;
-noaaChart.on('tileerror', () => {
-  chartErrors += 1;
-  if (chartErrors === 6) toast('NOAA charts aren\'t loading right now. Try another map from the layers button (top right).', 8000);
-});
-noaaChart.on('tileload', () => { chartErrors = 0; });
+for (const layer of [noaaChart, noaaLiveChart]) {
+  layer.on('tileerror', () => {
+    chartErrors += 1;
+    if (chartErrors === 6) toast('NOAA charts aren\'t loading right now. Try another map from the layers button (top right).', 8000);
+  });
+  layer.on('tileload', () => { chartErrors = 0; });
+}
 
 // Boat, trail, and projected drift overlays.
 const trailLine = L.polyline([], { color: '#1e90ff', weight: 3, opacity: 0.85 }).addTo(map);
@@ -104,6 +114,22 @@ function arrowHeadIcon(bearing) {
   });
 }
 
+// Drift plan overlays: target, start point, drift lane, and uncertainty cone.
+const PLAN_COLOR = '#12b76a';
+const planCone = L.polygon([], { color: PLAN_COLOR, weight: 1, opacity: 0.5, fillOpacity: 0.12, interactive: false });
+const planLaneCasing = L.polyline([], { color: '#ffffff', weight: 7, opacity: 0.8, interactive: false });
+const planLane = L.polyline([], { color: PLAN_COLOR, weight: 3, opacity: 1, interactive: false });
+const startMarker = L.marker([0, 0], {
+  interactive: false,
+  icon: L.divIcon({ className: '', iconSize: [0, 0], html: '<span class="plan-start-dot"></span><span class="plan-start">START</span>' }),
+});
+const targetMarker = L.marker([0, 0], {
+  draggable: true,
+  zIndexOffset: 900,
+  icon: L.divIcon({ className: 'plan-target', iconSize: [30, 30], iconAnchor: [15, 15], html: '<span></span>' }),
+});
+targetMarker.on('dragend', () => setTarget(targetMarker.getLatLng()));
+
 // ---------- State ----------
 const tracker = new DriftTracker({ windowSec: settings.windowSec });
 let stopSource = null;
@@ -115,6 +141,11 @@ let firstFix = true;
 let windField = loadCachedWind();
 let windFetching = false;
 let lastEstimate = null;
+let running = false;
+let recentKt = null;
+let sim = null; // demo simulator
+
+const plan = { target: null, leadMin: 2, drift: null, picking: false, ...loadPlan() };
 
 if (windField) particles.setField(windField);
 
@@ -140,9 +171,12 @@ function start(newMode) {
   $('hud-actions').hidden = false;
   $('drift-dir').textContent = 'Waiting for GPS…';
 
+  running = false;
+  recentKt = null;
   if (mode === 'demo') {
     const fast = Number(params.get('fast')) || 1;
-    stopSource = new DriftSimulator({ timeScale: fast }).start(onFix);
+    sim = new DriftSimulator({ timeScale: fast });
+    stopSource = sim.start(onFix);
   } else {
     stopSource = startGps(onFix, (err) => {
       const msg = gpsErrorMessage(err);
@@ -160,7 +194,9 @@ function start(newMode) {
 function stop() {
   if (stopSource) stopSource();
   stopSource = null;
+  sim = null;
   mode = null;
+  plan.picking = false;
   keepScreenOn(false);
   $('hud-actions').hidden = true;
   $('hud').hidden = true;
@@ -183,7 +219,19 @@ function onFix(fix) {
     centerOnBoat(latlng, false);
     refreshWind();
   }
-  lastEstimate = tracker.estimate();
+  // Running under power vs. drifting. Restart the drift measurement when the
+  // boat comes off plane so the run doesn't pollute it.
+  recentKt = tracker.recentSpeedKt(15);
+  if (!running && recentKt !== null && recentKt > RUN_START_KT) {
+    running = true;
+  } else if (running && recentKt !== null && recentKt < RUN_END_KT) {
+    running = false;
+    tracker.restartDrift();
+    tracker.addFix(fix);
+  }
+
+  lastEstimate = running ? null : tracker.estimate();
+  if (lastEstimate?.quality === 'good') updatePlanDrift(lastEstimate);
   render();
   if (follow) keepBoatInView(lastEstimate?.position ? [lastEstimate.position.lat, lastEstimate.position.lon] : latlng);
 }
@@ -228,7 +276,9 @@ function render() {
     driftArrow.style.transform = `rotate(${smoothRotation('drift', est.bearing)}deg)`;
   } else {
     $('drift-speed').textContent = '—';
-    if (mode && fix) {
+    if (mode && running) {
+      $('drift-dir').textContent = `Running ${Math.round(recentKt ?? 0)} kt · drift paused`;
+    } else if (mode && fix) {
       const need = Math.min(15, settings.windowSec / 2);
       $('drift-dir').textContent = `Measuring… (~${need}s)`;
     } else if (!mode) {
@@ -242,7 +292,7 @@ function render() {
   const windArrow = $('dial-wind');
   if (wind) {
     const gust = Number.isFinite(wind.gustKt) ? ` · gusts ${Math.round(wind.gustKt)}` : '';
-    $('wind-text').textContent = `${Math.round(wind.speedKt)} kt from ${compassPoint(wind.fromDeg)}${gust}`;
+    $('wind-text').textContent = `${compassPoint(wind.fromDeg)} ${Math.round(wind.speedKt)} kt${gust}`;
     windArrow.setAttribute('visibility', 'visible');
     windArrow.style.transform = `rotate(${smoothRotation('wind', normalizeDeg(wind.fromDeg + 180))}deg)`;
   } else {
@@ -251,13 +301,14 @@ function render() {
   }
 
   renderRelation(est, wind);
+  renderPlan(est);
   renderStatus();
 }
 
 /** Plain-language read on what's driving the drift. */
 function renderRelation(est, wind) {
   const chip = $('relation');
-  if (!est || !wind || est.quality === 'poor') { chip.hidden = true; return; }
+  if (!est || !wind || est.quality === 'poor' || planVisible()) { chip.hidden = true; return; }
   chip.hidden = false;
   chip.className = 'chip';
   if (wind.speedKt < 4) {
@@ -384,6 +435,170 @@ function renderForecast() {
       <span>${Math.round(h.speedKt)} kt from ${compassPoint(h.fromDeg)}${gust}</span>`;
     list.appendChild(li);
   });
+}
+
+// ---------- Drift planner ----------
+// Tap a target; the app uses your measured drift to show where to start so
+// the drift carries you over it, then guides you there and along the drift.
+
+function loadPlan() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('fluke.plan')) || {};
+    return { target: saved.target ?? null, leadMin: saved.leadMin ?? 2, drift: saved.drift ?? null };
+  } catch { return {}; }
+}
+function savePlan() {
+  try {
+    localStorage.setItem('fluke.plan', JSON.stringify({ target: plan.target, leadMin: plan.leadMin, drift: plan.drift }));
+  } catch { /* not critical */ }
+}
+
+const planVisible = () => !!mode && (plan.picking || !!plan.target);
+
+function setTarget(latlng) {
+  plan.target = { lat: latlng.lat, lon: latlng.lng ?? latlng.lon };
+  plan.picking = false;
+  savePlan();
+  render();
+  zoomToPlan();
+}
+
+// Zoom to the drift lane (start → target), clear of the top bar and HUD.
+// The HUD says where the start is relative to the boat.
+function zoomToPlan() {
+  const pts = [[plan.target.lat, plan.target.lon]];
+  if (plan.drift) {
+    const s = startPoint(plan.target, plan.drift, plan.leadMin * 60);
+    const beyond = destination(plan.target, plan.drift.bearing, 30);
+    pts.push([s.lat, s.lon], [beyond.lat, beyond.lon]);
+  } else if (tracker.latestFix) {
+    pts.push([tracker.latestFix.lat, tracker.latestFix.lon]);
+  }
+  follow = false;
+  map.fitBounds(pts, {
+    paddingTopLeft: [40, 90],
+    paddingBottomRight: [40, $('hud').offsetHeight + 30],
+    maxZoom: 17,
+  });
+}
+
+function clearPlan() {
+  plan.target = null;
+  plan.picking = false;
+  savePlan();
+  render();
+}
+
+let planSavedAt = 0;
+function updatePlanDrift(est) {
+  plan.drift = {
+    east: est.east, north: est.north, speedKt: est.speedKt, bearing: est.bearing, uncertaintyKt: est.uncertaintyKt,
+  };
+  if (Date.now() - planSavedAt > 10000) { planSavedAt = Date.now(); savePlan(); }
+}
+
+map.on('click', (e) => { if (plan.picking && mode) setTarget(e.latlng); });
+
+$('btn-plan').addEventListener('click', () => {
+  plan.picking = true;
+  render();
+});
+$('btn-plan-clear').addEventListener('click', clearPlan);
+$('btn-demo-run').addEventListener('click', () => {
+  if (!sim || !plan.target || !plan.drift) return;
+  sim.runTo(startPoint(plan.target, plan.drift, plan.leadMin * 60), 20);
+  follow = true;
+});
+
+const leadSelect = $('lead-select');
+LEAD_OPTIONS_MIN.forEach((m) => {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = `${m} min`;
+  b.addEventListener('click', () => { plan.leadMin = m; savePlan(); render(); zoomToPlan(); });
+  leadSelect.appendChild(b);
+});
+
+function renderPlan(est) {
+  const panel = $('plan');
+  const show = planVisible();
+  panel.hidden = !show;
+  $('btn-plan').textContent = plan.target ? 'New target' : 'Plan drift';
+  [...leadSelect.children].forEach((b, i) => b.classList.toggle('on', LEAD_OPTIONS_MIN[i] === plan.leadMin));
+  $('plan-controls').hidden = !plan.target;
+
+  const fix = tracker.latestFix;
+  const haveDrift = !!(plan.target && plan.drift);
+  const start = haveDrift ? startPoint(plan.target, plan.drift, plan.leadMin * 60) : null;
+  $('btn-demo-run').hidden = !(mode === 'demo' && haveDrift && !running);
+
+  // Map overlays
+  if (show && plan.target) {
+    targetMarker.setLatLng([plan.target.lat, plan.target.lon]).addTo(map);
+  } else {
+    targetMarker.remove();
+  }
+  if (show && start) {
+    const lane = distanceBearing(start, plan.target);
+    const beyond = destination(plan.target, lane.bearing, Math.max(30, lane.distanceM * 0.4));
+    const pts = [[start.lat, start.lon], [beyond.lat, beyond.lon]];
+    planLaneCasing.setLatLngs(pts).addTo(map);
+    planLane.setLatLngs(pts).addTo(map);
+    startMarker.setLatLng([start.lat, start.lon]).addTo(map);
+
+    const half = Math.max(3, Math.min(45, directionUncertaintyDeg(plan.drift.speedKt, plan.drift.uncertaintyKt)));
+    const len = lane.distanceM * 1.4;
+    const cone = [[start.lat, start.lon]];
+    for (let a = -half; a <= half + 0.01; a += half / 4) {
+      const p = destination(start, lane.bearing + a, len);
+      cone.push([p.lat, p.lon]);
+    }
+    planCone.setLatLngs(cone).addTo(map);
+  } else {
+    [planLaneCasing, planLane, startMarker, planCone].forEach((l) => l.remove());
+  }
+
+  if (!show) return;
+
+  // Panel text
+  const status = $('plan-status');
+  const sub = $('plan-sub');
+  status.className = 'plan-status';
+  sub.textContent = '';
+  if (!plan.target) {
+    status.textContent = 'Tap the spot on the chart you want to drift over';
+    return;
+  }
+  if (!plan.drift || !fix) {
+    status.textContent = running
+      ? 'Stop and drift for a minute so I can measure your drift'
+      : 'Measuring your drift… engine in neutral for about a minute';
+    return;
+  }
+
+  const unc = Math.round(directionUncertaintyDeg(plan.drift.speedKt, plan.drift.uncertaintyKt));
+  sub.textContent = `Using your ${plan.drift.speedKt.toFixed(1)} kt ${compassPoint(plan.drift.bearing)} drift (±${unc}°)`;
+
+  const pos = est ? est.position : fix;
+  const live = est && est.quality !== 'poor' ? est : null;
+  const st = planStatus({ pos, target: plan.target, start, live, running });
+  if (st.phase === 'drifting') {
+    const t = formatDuration(st.approach.timeSec);
+    if (st.onTarget) {
+      status.textContent = `On line · over target in ${t}`;
+      status.classList.add('good');
+    } else {
+      status.textContent = `Passing ${formatDistance(st.approach.distanceM)} ${compassPoint(st.approach.sideBearing)} of target · ${t}`;
+      status.classList.add('off');
+    }
+  } else if (st.phase === 'past') {
+    status.textContent = `Past the target · start is ${formatDistance(st.distanceM)} ${compassPoint(st.bearing)}`;
+  } else if (!running && st.distanceM < 30) {
+    status.textContent = 'At the start · let her drift';
+    status.classList.add('good');
+  } else {
+    status.textContent = `Run to start · ${formatDistance(st.distanceM)} ${compassPoint(st.bearing)} (${Math.round(st.bearing)}°)`;
+  }
 }
 
 // ---------- Follow the boat ----------
