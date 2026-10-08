@@ -1,0 +1,15 @@
+{
+  "name": "Fluke Drift",
+  "short_name": "Fluke Drift",
+  "description": "See your boat's drift at a glance, with live wind.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b1620",
+  "theme_color": "#0b1620",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
